@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Startup Idea Analyzer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    body {
+      background: #f4f7fb;
+      font-family: "Inter", sans-serif;
+    }
+    .main-wrapper { max-width: 950px; margin: 0 auto; }
+    .card { border: none; border-radius: 18px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06); }
+    .metric-card { background: white; padding: 18px; border-radius: 15px; text-align: center; transition: transform 0.2s ease; }
+    .metric-card:hover { transform: translateY(-4px); }
+    .metric-value { font-size: 24px; font-weight: 700; color: #2a4b8d; }
+    .metric-title { font-size: 15px; color: #666; }
+    .section-title { font-size: 20px; font-weight: 700; color: #333; margin-top: 25px; }
+    #trend-box { background: #fff7f0; padding: 15px; border-radius: 12px; font-size: 15px; }
+    .progress { height: 20px; border-radius: 10px; background: #e9ecef; overflow: hidden; }
+    .progress-bar { background: linear-gradient(90deg, #2a74ff, #5bc0ff); transition: width 1s ease-in-out; }
+    .recommendations li { margin-bottom: 6px; }
+    .search-signals { font-size: 14px; color: #666; margin-top: 8px; }
+    .insight-summary { background: #eaf3ff; padding: 15px; border-radius: 12px; margin-top: 15px; font-size: 15px; }
+
+    /* 🔍 Addon Sections */
+    .addon-section { background: #ffffff; padding: 18px; border-radius: 12px; margin-top: 25px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05); }
+    .addon-section h5 { color: #2a4b8d; font-weight: 600; }
+    .competitor-list { background: #eef3ff; padding: 10px; border-radius: 8px; font-size: 15px; }
+    .investor-score { background: linear-gradient(90deg, #5bc0ff, #2a74ff); color: white; padding: 12px; border-radius: 10px; text-align: center; font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+  </style>
+</head>
+
+<body>
+  <div class="main-wrapper py-5">
+    <h2 class="text-center mb-4">🚀 AI Startup Idea Analyzer</h2>
+
+    <!-- Input Form -->
+    <div class="card p-4 mb-4">
+      <form id="ideaForm">
+        <label class="form-label fw-bold">💡 Enter Your Startup Idea</label>
+        <textarea class="form-control mb-3" id="idea" rows="3" placeholder="e.g. AI-powered platform that helps farmers optimize crop yield"></textarea>
+        <button type="submit" class="btn btn-primary w-100">Analyze Idea</button>
+      </form>
+    </div>
+
+    <!-- Results Section -->
+    <div id="results" style="display: none">
+      <h4 class="section-title">📊 Analysis Overview</h4>
+
+      <div class="row g-3 mt-2">
+        <div class="col-md-4 col-6"><div class="metric-card"><div class="metric-value" id="aiPotential">-</div><div class="metric-title">AI Potential</div></div></div>
+        <div class="col-md-4 col-6"><div class="metric-card"><div class="metric-value" id="uniqueness">-</div><div class="metric-title">Uniqueness</div></div></div>
+        <div class="col-md-4 col-6"><div class="metric-card"><div class="metric-value" id="risk">-</div><div class="metric-title">Risk (Competition)</div></div></div>
+        <div class="col-md-4 col-6"><div class="metric-card"><div class="metric-value" id="innovation">-</div><div class="metric-title">Innovation</div></div></div>
+        <div class="col-md-4 col-6"><div class="metric-card"><div class="metric-value" id="marketFeasibility">-</div><div class="metric-title">Market Feasibility</div></div></div>
+        <div class="col-md-4 col-6"><div class="metric-card"><div class="metric-value" id="techComplexity">-</div><div class="metric-title">Tech Complexity</div></div></div>
+      </div>
+
+      <canvas id="metricsChart" class="mt-4"></canvas>
+
+      <div class="section-title mt-5">📈 Market Trend & Success Probability</div>
+      <div id="trend-box" class="mt-2"><p id="marketTrendText">Loading trend analysis...</p></div>
+      <div class="insight-summary" id="insightSummary"></div>
+
+      <div class="mt-3">
+        <label class="fw-bold">Chance to Succeed in Current Market</label>
+        <div class="progress mt-1">
+          <div class="progress-bar" id="marketChanceBar" role="progressbar" style="width: 0%">
+            <span id="marketChanceValue" class="ps-2"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title mt-4">💡 Market Recommendations</div>
+      <ul class="recommendations" id="marketRecommendations"></ul>
+
+      <div class="search-signals" id="searchSignals"></div>
+
+      <div class="section-title mt-4">🔍 Similar Startup Ideas</div>
+      <div id="similarIdeas"></div>
+
+      <!-- 🧩 Real-Time Startup Competitor Finder -->
+      <div class="addon-section mt-5">
+        <h5>🏁 Real-Time Startup Competitor Finder</h5>
+        <div class="competitor-list" id="competitorList">Scanning...</div>
+      </div>
+
+      <!-- 💰 Investor Readiness Score -->
+      <div class="addon-section mt-4">
+        <h5>💰 Investor Readiness Score</h5>
+        <div class="investor-score" id="investorScore">Calculating...</div>
+        <p class="text-center mt-2 text-muted" id="investorSummary"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("ideaForm");
+    const resultsSection = document.getElementById("results");
+    let chartInstance;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const idea = document.getElementById("idea").value.trim();
+      if (!idea) return alert("Please enter your startup idea!");
+
+      resultsSection.style.display = "none";
+      document.getElementById("marketTrendText").innerText = "Analyzing...";
+
+      const res = await fetch("/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idea }),
+      });
+      const data = await res.json();
+      if (data.error) return alert(data.error);
+
+      // Update metric values
+      const setVal = (id, val) => (document.getElementById(id).innerText = val + "%");
+      setVal("aiPotential", data.ai_potential);
+      setVal("uniqueness", data.uniqueness);
+      setVal("risk", data.risk);
+      setVal("innovation", data.innovation);
+      setVal("marketFeasibility", data.market_feasibility);
+      setVal("techComplexity", data.tech_complexity);
+
+      // Chart
+      const ctx = document.getElementById("metricsChart");
+      if (chartInstance) chartInstance.destroy();
+      chartInstance = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: ["AI Potential", "Uniqueness", "Risk", "Innovation", "Market", "Tech"],
+          datasets: [{
+            label: "Score (%)",
+            data: [data.ai_potential, data.uniqueness, data.risk, data.innovation, data.market_feasibility, data.tech_complexity],
+            backgroundColor: ["#2a74ff", "#66cdaa", "#ff6f61", "#5bc0ff", "#f6b93b", "#b18cff"]
+          }],
+        },
+        options: { scales: { y: { beginAtZero: true, max: 100 } } },
+      });
+
+      // Text sections
+      document.getElementById("marketTrendText").innerText = data.market_trend;
+      document.getElementById("insightSummary").innerHTML = `
+        <b>Market Buzz:</b> ${data.market_chance > 70 ? "🔥 Very Active Market" : data.market_chance > 40 ? "📈 Growing Interest" : "💤 Still Emerging"}<br>
+        <b>Overall Chance:</b> ${data.market_chance}%<br>
+        <b>Heuristic Feasibility:</b> ${data.market_feasibility}%
+      `;
+      const marketChanceBar = document.getElementById("marketChanceBar");
+      marketChanceBar.style.width = data.market_chance + "%";
+      document.getElementById("marketChanceValue").innerText = data.market_chance + "%";
+
+      // Recommendations
+      const recList = document.getElementById("marketRecommendations");
+      recList.innerHTML = "";
+      data.market_recommendations.forEach((r) => {
+        const li = document.createElement("li");
+        li.innerText = "💡 " + r;
+        recList.appendChild(li);
+      });
+
+      const sig = data.search_signals;
+      document.getElementById("searchSignals").innerHTML = `
+        Competitors Found: <b>${sig.competitor_count}</b> |
+        Avg Similarity: <b>${sig.avg_similarity}%</b> |
+        Recent Ratio: <b>${sig.top_recent_ratio}</b>
+      `;
+
+      // Competitors (Real-Time Finder)
+      const competitorList = document.getElementById("competitorList");
+      competitorList.innerHTML = "";
+      (data.competitors || []).forEach((c) => {
+        competitorList.innerHTML += `• <b>${c.name}</b> (${c.type || "Moderate"})<br>`;
+      });
+      if (!data.competitors?.length) competitorList.innerText = "No strong competitors found.";
+
+      // Investor Readiness Score
+      document.getElementById("investorScore").innerText = `${data.investor_readiness}% Ready for Investors 🚀`;
+      document.getElementById("investorSummary").innerText = data.investor_summary;
+
+      // Similar Ideas
+      const similarDiv = document.getElementById("similarIdeas");
+      similarDiv.innerHTML = "";
+      (data.results || []).forEach((r) => {
+        const d = document.createElement("div");
+        d.className = "p-3 my-2 rounded";
+        d.style.background = "#eef3ff";
+        d.innerHTML = `<a href="${r.link}" target="_blank" class="fw-bold text-decoration-none">${r.title}</a>
+          <div class="text-muted small">Similarity: ${r.similarity}%</div>`;
+        similarDiv.appendChild(d);
+      });
+
+      resultsSection.style.display = "block";
+    });
+  </script>
+</body>
+</html>

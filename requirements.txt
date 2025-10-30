@@ -1,0 +1,17 @@
+flask
+flask_sqlalchemy
+flask_migrate
+gunicorn
+python-dotenv
+google-generativeai
+sentence-transformers
+torch
+requests
+serpapi
+psycopg2-binary
+pandas
+numpy
+scikit-learn
+matplotlib
+seaborn
+sqlalchemy
