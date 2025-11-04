@@ -6,30 +6,50 @@ from sentence_transformers import SentenceTransformer, util
 import requests
 import json
 import re
+import logging
 from . import db
 from .models import StartupIdea
 
+# Blueprint
 main = Blueprint("main", __name__)
 
-# 🔑 Load API Keys
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 🔑 Load environment variables
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 
+# Validate API keys early
+if not GEMINI_API_KEY:
+    logger.warning("⚠️ GEMINI_API_KEY missing in environment variables.")
+if not SERPAPI_KEY:
+    logger.warning("⚠️ SERPAPI_KEY missing in environment variables.")
+
+# Configure Google GenAI
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL_NAME = "gemini-2.0-flash"
+
+# Load sentence transformer model (smallest fast version)
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# 🧮 Clamp utility
+
 def clamp(n, smallest=0, largest=100):
+    """Ensure a number stays within [smallest, largest]."""
     return max(smallest, min(n, largest))
+
+
 
 @main.route("/")
 def index():
     return render_template("index.html")
 
-# 📊 Market Feasibility
+
+
 def compute_market_feasibility(competitor_count, avg_similarity, top_recent_ratio=0.0):
+    """Heuristic for market feasibility based on competition, similarity, and recency."""
     base = 70
     comp_penalty = clamp(competitor_count * 5, 0, 50)
     sim_penalty = (avg_similarity / 100.0) * 25
@@ -37,17 +57,20 @@ def compute_market_feasibility(competitor_count, avg_similarity, top_recent_rati
     score = base - comp_penalty - sim_penalty + recency_boost
     return int(clamp(round(score), 0, 100))
 
+
+
 @main.route("/analyze", methods=["POST"])
 def analyze_idea():
     payload = request.get_json() or {}
     user_idea = (payload.get("idea") or "").strip()
+
     if not user_idea:
         return jsonify({"error": "No idea provided"}), 400
 
     serp_results, competitors = [], []
     competitor_count = avg_similarity = top_recent_ratio = 0
 
-    # 🔍 STEP 1 — SERP API Search
+    # 🔍 STEP 1 — Search using SERP API
     serpapi_url = (
         f"https://serpapi.com/search.json?"
         f"engine=google&q={requests.utils.quote(user_idea + ' startup 2025')}"
@@ -57,7 +80,8 @@ def analyze_idea():
     try:
         resp = requests.get(serpapi_url, timeout=10)
         serp_data = resp.json()
-    except Exception:
+    except Exception as e:
+        logger.error(f"SERP API Error: {e}")
         serp_data = {}
 
     if serp_data.get("organic_results"):
@@ -99,7 +123,7 @@ def analyze_idea():
         avg_similarity = sum(similarities) / len(similarities)
         top_recent_ratio = recent_count / competitor_count if competitor_count else 0
 
-    # 🧮 STEP 2 — Market Feasibility
+    # 🧮 STEP 2 — Market Feasibility Heuristic
     market_feasibility_heuristic = compute_market_feasibility(
         competitor_count, avg_similarity, top_recent_ratio
     )
@@ -131,7 +155,8 @@ Return ONLY JSON:
         market_chance = int(clamp(gem_json.get("market_chance", 60)))
         market_recommendations = gem_json.get("market_recommendations", [])
         top_competitors_ai = gem_json.get("top_competitors", [])
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Gemini Market Trend Error: {e}")
         market_trend = "Unable to fetch trend data."
         buzz_index = 55
         market_chance = market_feasibility_heuristic
@@ -164,12 +189,13 @@ For startup idea "{user_idea}", return JSON:
         risk = int(clamp(quick_json.get("risk", 50)))
         tech_complexity = int(clamp(quick_json.get("tech_complexity", 50)))
         success_probability = int(clamp(quick_json.get("success_probability", market_feasibility_heuristic)))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Gemini Metrics Error: {e}")
         ai_potential, innovation, uniqueness, risk, tech_complexity, success_probability = (
             60, 65, 60, 50, 50, market_feasibility_heuristic
         )
 
-    # 💰 STEP 5 — Investor Readiness Score
+    # 💰 STEP 5 — Investor Readiness
     investor_readiness = int(clamp(round(
         0.25 * market_feasibility_heuristic +
         0.25 * innovation +
@@ -187,10 +213,11 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
         text = re.sub(r"```(json)?", "", resp.text).strip()
         exp_json = json.loads(text)
         investor_summary = exp_json.get("investor_summary", "Strong early-stage potential with balanced risk.")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Gemini Summary Error: {e}")
         investor_summary = "Strong early-stage potential with balanced risk."
 
-    # ✅ Combine competitor data (SERP + AI)
+    # ✅ Combine competitor data
     final_competitors = []
     seen = set()
     for c in competitors + top_competitors_ai:
@@ -199,20 +226,24 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
             seen.add(name)
             final_competitors.append(c)
 
-    # 💾 STEP 6 — Save to Database
-    new_entry = StartupIdea(
-        idea_text=user_idea,
-        ai_potential=ai_potential,
-        innovation=innovation,
-        uniqueness=uniqueness,
-        risk=risk,
-        tech_complexity=tech_complexity,
-        market_feasibility=market_feasibility_heuristic,
-        investor_readiness=investor_readiness,
-        market_chance=market_chance
-    )
-    db.session.add(new_entry)
-    db.session.commit()
+    # 💾 Save to DB
+    try:
+        new_entry = StartupIdea(
+            idea_text=user_idea,
+            ai_potential=ai_potential,
+            innovation=innovation,
+            uniqueness=uniqueness,
+            risk=risk,
+            tech_complexity=tech_complexity,
+            market_feasibility=market_feasibility_heuristic,
+            investor_readiness=investor_readiness,
+            market_chance=market_chance
+        )
+        db.session.add(new_entry)
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Database insert failed: {e}")
+        db.session.rollback()
 
     # ✅ Final JSON Response
     return jsonify({
@@ -239,17 +270,22 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
     })
 
 
-# 📜 STEP 7 — View Past Analyses
+
 @main.route("/history", methods=["GET"])
 def history():
-    ideas = StartupIdea.query.order_by(StartupIdea.timestamp.desc()).limit(10).all()
-    return jsonify([
-        {
-            "id": i.id,
-            "idea": i.idea_text,
-            "ai_potential": i.ai_potential,
-            "market_feasibility": i.market_feasibility,
-            "investor_readiness": i.investor_readiness,
-            "timestamp": i.timestamp.strftime("%Y-%m-%d %H:%M")
-        } for i in ideas
-    ])
+    """Return last 10 analyzed ideas."""
+    try:
+        ideas = StartupIdea.query.order_by(StartupIdea.timestamp.desc()).limit(10).all()
+        return jsonify([
+            {
+                "id": i.id,
+                "idea": i.idea_text,
+                "ai_potential": i.ai_potential,
+                "market_feasibility": i.market_feasibility,
+                "investor_readiness": i.investor_readiness,
+                "timestamp": i.timestamp.strftime("%Y-%m-%d %H:%M")
+            } for i in ideas
+        ])
+    except Exception as e:
+        logger.error(f"History fetch failed: {e}")
+        return jsonify({"error": "Unable to fetch history"}), 500
