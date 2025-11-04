@@ -2,7 +2,6 @@ from flask import Blueprint, render_template, request, jsonify
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
-from sentence_transformers import SentenceTransformer, util
 import requests
 import json
 import re
@@ -21,23 +20,48 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")
 
 # Validate API keys early
 if not GEMINI_API_KEY:
     logger.warning("⚠️ GEMINI_API_KEY missing in environment variables.")
 if not SERPAPI_KEY:
     logger.warning("⚠️ SERPAPI_KEY missing in environment variables.")
+if not HF_API_KEY:
+    logger.warning("⚠️ HF_API_KEY missing in environment variables.")
 
 # Configure Google GenAI
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL_NAME = "gemini-2.0-flash"
 
-# Load sentence transformer model (smallest fast version)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Hugging Face Embedding API
+HF_MODEL_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+HF_HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
+
+
+def get_embedding(text):
+    """Generate embedding using Hugging Face API (lightweight, external)."""
+    try:
+        response = requests.post(HF_MODEL_URL, headers=HF_HEADERS, json={"inputs": text}, timeout=15)
+        if response.status_code != 200:
+            logger.error(f"HF API Error: {response.text}")
+            return []
+        return response.json()[0]
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {e}")
+        return []
+
+
+def cosine_similarity(vec1, vec2):
+    """Compute cosine similarity between two vectors."""
+    if not vec1 or not vec2:
+        return 0.0
+    import numpy as np
+    a, b = np.array(vec1), np.array(vec2)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
 def clamp(n, smallest=0, largest=100):
-    """Ensure a number stays within [smallest, largest]."""
     return max(smallest, min(n, largest))
 
 
@@ -49,7 +73,6 @@ def index():
 
 
 def compute_market_feasibility(competitor_count, avg_similarity, top_recent_ratio=0.0):
-    """Heuristic for market feasibility based on competition, similarity, and recency."""
     base = 70
     comp_penalty = clamp(competitor_count * 5, 0, 50)
     sim_penalty = (avg_similarity / 100.0) * 25
@@ -95,8 +118,9 @@ def analyze_idea():
             link = item.get("link", "#")
 
             try:
-                embeddings = model.encode([user_idea, title + " " + snippet], convert_to_tensor=True)
-                sim = util.pytorch_cos_sim(embeddings[0], embeddings[1]).item()
+                emb_idea = get_embedding(user_idea)
+                emb_text = get_embedding(title + " " + snippet)
+                sim = cosine_similarity(emb_idea, emb_text)
                 sim_pct = round(sim * 100, 2)
             except Exception:
                 sim_pct = 0.0
@@ -109,13 +133,12 @@ def analyze_idea():
                 "similarity": sim_pct
             })
 
-            if re.search(r"\b[A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)*\b", title):
-                competitors.append({
-                    "name": title.split(" – ")[0].strip(),
-                    "link": link,
-                    "similarity": sim_pct,
-                    "snippet": snippet
-                })
+            competitors.append({
+                "name": title.split(" – ")[0].strip(),
+                "link": link,
+                "similarity": sim_pct,
+                "snippet": snippet
+            })
 
             if any(y in snippet.lower() for y in ["2025", "2024", "2023"]):
                 recent_count += 1
@@ -273,7 +296,6 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
 
 @main.route("/history", methods=["GET"])
 def history():
-    """Return last 10 analyzed ideas."""
     try:
         ideas = StartupIdea.query.order_by(StartupIdea.timestamp.desc()).limit(10).all()
         return jsonify([

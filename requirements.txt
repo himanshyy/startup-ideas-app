@@ -4,11 +4,10 @@ flask_migrate
 gunicorn
 python-dotenv
 google-generativeai
-sentence-transformers
 requests
 serpapi
 psycopg2-binary
 pandas
 numpy
 sqlalchemy
-gunicorn
+huggingface-hub
