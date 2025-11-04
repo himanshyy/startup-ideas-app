@@ -11,3 +11,4 @@ psycopg2-binary
 pandas
 numpy
 sqlalchemy
+gunicorn
