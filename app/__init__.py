@@ -15,7 +15,7 @@ def create_app():
     app = Flask(__name__)
 
     # 🔹 Database Configuration
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "postgresql://startup_user:himanshi@localhost/startup_ideas_db")
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     # Initialize database and migrations
