@@ -6,23 +6,26 @@ import requests
 import json
 import re
 import logging
+import numpy as np
 from . import db
 from .models import StartupIdea
 
-# Blueprint
+# -------------------------------------------------------------------
+# Blueprint & Logging
+# -------------------------------------------------------------------
 main = Blueprint("main", __name__)
-
-# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 🔑 Load environment variables
+# -------------------------------------------------------------------
+# Environment Variables
+# -------------------------------------------------------------------
 load_dotenv()
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-HF_API_KEY = os.getenv("HF_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY") or os.getenv("HF_API_TOKEN")
 
-# Validate API keys early
 if not GEMINI_API_KEY:
     logger.warning("⚠️ GEMINI_API_KEY missing in environment variables.")
 if not SERPAPI_KEY:
@@ -30,47 +33,48 @@ if not SERPAPI_KEY:
 if not HF_API_KEY:
     logger.warning("⚠️ HF_API_KEY missing in environment variables.")
 
-# Configure Google GenAI
+# -------------------------------------------------------------------
+# Model Config
+# -------------------------------------------------------------------
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL_NAME = "gemini-2.0-flash"
 
-# Hugging Face Embedding API
 HF_MODEL_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
 HF_HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
 
-
+# -------------------------------------------------------------------
+# Embedding Function (External API → Light)
+# -------------------------------------------------------------------
 def get_embedding(text):
-    """Generate embedding using Hugging Face API (lightweight, external)."""
+    """Generate lightweight embeddings via Hugging Face API."""
     try:
-        response = requests.post(HF_MODEL_URL, headers=HF_HEADERS, json={"inputs": text}, timeout=15)
+        response = requests.post(
+            HF_MODEL_URL,
+            headers=HF_HEADERS,
+            json={"inputs": text},
+            timeout=15
+        )
         if response.status_code != 200:
-            logger.error(f"HF API Error: {response.text}")
+            logger.error(f"Hugging Face API Error: {response.text}")
             return []
-        return response.json()[0]
+        result = response.json()
+        # API sometimes wraps the embedding in a nested list
+        return result[0] if isinstance(result[0], list) else result
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
         return []
 
-
+# -------------------------------------------------------------------
+# Helper Functions
+# -------------------------------------------------------------------
 def cosine_similarity(vec1, vec2):
-    """Compute cosine similarity between two vectors."""
     if not vec1 or not vec2:
         return 0.0
-    import numpy as np
     a, b = np.array(vec1), np.array(vec2)
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-
 def clamp(n, smallest=0, largest=100):
     return max(smallest, min(n, largest))
-
-
-
-@main.route("/")
-def index():
-    return render_template("index.html")
-
-
 
 def compute_market_feasibility(competitor_count, avg_similarity, top_recent_ratio=0.0):
     base = 70
@@ -80,8 +84,16 @@ def compute_market_feasibility(competitor_count, avg_similarity, top_recent_rati
     score = base - comp_penalty - sim_penalty + recency_boost
     return int(clamp(round(score), 0, 100))
 
+# -------------------------------------------------------------------
+# Routes
+# -------------------------------------------------------------------
+@main.route("/")
+def index():
+    return render_template("index.html")
 
-
+# -------------------------------------------------------------------
+# Analyze Idea Route
+# -------------------------------------------------------------------
 @main.route("/analyze", methods=["POST"])
 def analyze_idea():
     payload = request.get_json() or {}
@@ -93,7 +105,7 @@ def analyze_idea():
     serp_results, competitors = [], []
     competitor_count = avg_similarity = top_recent_ratio = 0
 
-    # 🔍 STEP 1 — Search using SERP API
+    # 🔍 STEP 1 — SERP API Search
     serpapi_url = (
         f"https://serpapi.com/search.json?"
         f"engine=google&q={requests.utils.quote(user_idea + ' startup 2025')}"
@@ -146,51 +158,49 @@ def analyze_idea():
         avg_similarity = sum(similarities) / len(similarities)
         top_recent_ratio = recent_count / competitor_count if competitor_count else 0
 
-    # 🧮 STEP 2 — Market Feasibility Heuristic
-    market_feasibility_heuristic = compute_market_feasibility(
+    # 🧮 STEP 2 — Market Feasibility
+    market_feasibility = compute_market_feasibility(
         competitor_count, avg_similarity, top_recent_ratio
     )
 
-    # 🌍 STEP 3 — Gemini Market & Competitor Intelligence
+    # 🌍 STEP 3 — Gemini Trend Analysis
     try:
-        context = "\n".join([f"- {r['title']} ({r['similarity']}%)" for r in serp_results[:5]]) or "No similar startups."
+        context = "\n".join([f"- {r['title']} ({r['similarity']}%)" for r in serp_results[:5]]) or "No competitors."
         prompt = f"""
-You are a startup analyst. Based on:
-Idea: "{user_idea}"
-Competitor Data:
+Analyze the startup idea "{user_idea}" with the following competitor data:
 {context}
 
-Return ONLY JSON:
+Return JSON only:
 {{
-  "market_trend": "short summary of 2025 trend",
+  "market_trend": "short summary",
   "top_competitors": [{{"name": "string", "type": "High/Moderate/Emerging"}}],
   "buzz_index": 0-100,
   "market_chance": 0-100,
-  "market_recommendations": ["3 short points"]
+  "market_recommendations": ["3 concise points"]
 }}
 """
         gem_resp = genai.GenerativeModel(MODEL_NAME).generate_content(prompt)
         gem_text = re.sub(r"```(json)?", "", gem_resp.text).strip()
         gem_json = json.loads(gem_text)
 
-        market_trend = gem_json.get("market_trend", "Trend data unavailable.")
+        market_trend = gem_json.get("market_trend", "Data unavailable.")
         buzz_index = int(clamp(gem_json.get("buzz_index", 60)))
         market_chance = int(clamp(gem_json.get("market_chance", 60)))
         market_recommendations = gem_json.get("market_recommendations", [])
         top_competitors_ai = gem_json.get("top_competitors", [])
     except Exception as e:
-        logger.warning(f"Gemini Market Trend Error: {e}")
-        market_trend = "Unable to fetch trend data."
+        logger.warning(f"Gemini Market Analysis Error: {e}")
+        market_trend = "Unable to fetch market trend."
         buzz_index = 55
-        market_chance = market_feasibility_heuristic
+        market_chance = market_feasibility
         market_recommendations = [
             "Validate idea with early adopters",
             "Focus on differentiation",
-            "Build strong community presence"
+            "Target niche audience first"
         ]
         top_competitors_ai = [{"name": c["name"], "type": "Moderate"} for c in competitors[:3]]
 
-    # 💡 STEP 4 — AI / Innovation Metrics
+    # 💡 STEP 4 — Innovation Metrics
     try:
         quick_prompt = f"""
 For startup idea "{user_idea}", return JSON:
@@ -204,23 +214,23 @@ For startup idea "{user_idea}", return JSON:
 }}
 """
         quick_resp = genai.GenerativeModel(MODEL_NAME).generate_content(quick_prompt)
-        quick_text = re.sub(r"```(json)?", "", quick_resp.text).strip()
-        quick_json = json.loads(quick_text)
+        quick_json = json.loads(re.sub(r"```(json)?", "", quick_resp.text).strip())
+
         ai_potential = int(clamp(quick_json.get("ai_potential", 60)))
         innovation = int(clamp(quick_json.get("innovation", 65)))
         uniqueness = int(clamp(quick_json.get("uniqueness", 60)))
         risk = int(clamp(quick_json.get("risk", 50)))
         tech_complexity = int(clamp(quick_json.get("tech_complexity", 50)))
-        success_probability = int(clamp(quick_json.get("success_probability", market_feasibility_heuristic)))
+        success_probability = int(clamp(quick_json.get("success_probability", market_feasibility)))
     except Exception as e:
         logger.warning(f"Gemini Metrics Error: {e}")
         ai_potential, innovation, uniqueness, risk, tech_complexity, success_probability = (
-            60, 65, 60, 50, 50, market_feasibility_heuristic
+            60, 65, 60, 50, 50, market_feasibility
         )
 
     # 💰 STEP 5 — Investor Readiness
     investor_readiness = int(clamp(round(
-        0.25 * market_feasibility_heuristic +
+        0.25 * market_feasibility +
         0.25 * innovation +
         0.20 * ai_potential +
         0.15 * (100 - risk) +
@@ -229,18 +239,17 @@ For startup idea "{user_idea}", return JSON:
 
     try:
         summary_prompt = f"""
-Explain briefly why idea "{user_idea}" has investor readiness {investor_readiness}%.
-Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
+Explain in one sentence why idea "{user_idea}" has investor readiness {investor_readiness}%.
+Return JSON only: {{"investor_summary": "short summary"}}
 """
         resp = genai.GenerativeModel(MODEL_NAME).generate_content(summary_prompt)
-        text = re.sub(r"```(json)?", "", resp.text).strip()
-        exp_json = json.loads(text)
-        investor_summary = exp_json.get("investor_summary", "Strong early-stage potential with balanced risk.")
+        exp_json = json.loads(re.sub(r"```(json)?", "", resp.text).strip())
+        investor_summary = exp_json.get("investor_summary", "Promising early-stage opportunity.")
     except Exception as e:
         logger.warning(f"Gemini Summary Error: {e}")
-        investor_summary = "Strong early-stage potential with balanced risk."
+        investor_summary = "Promising early-stage opportunity."
 
-    # ✅ Combine competitor data
+    # ✅ Combine competitors
     final_competitors = []
     seen = set()
     for c in competitors + top_competitors_ai:
@@ -258,7 +267,7 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
             uniqueness=uniqueness,
             risk=risk,
             tech_complexity=tech_complexity,
-            market_feasibility=market_feasibility_heuristic,
+            market_feasibility=market_feasibility,
             investor_readiness=investor_readiness,
             market_chance=market_chance
         )
@@ -268,7 +277,7 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
         logger.error(f"Database insert failed: {e}")
         db.session.rollback()
 
-    # ✅ Final JSON Response
+    # ✅ Final Response
     return jsonify({
         "market_trend": market_trend,
         "market_chance": market_chance,
@@ -281,7 +290,7 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
         "risk": risk,
         "tech_complexity": tech_complexity,
         "success_probability": success_probability,
-        "market_feasibility": market_feasibility_heuristic,
+        "market_feasibility": market_feasibility,
         "investor_readiness": investor_readiness,
         "investor_summary": investor_summary,
         "search_signals": {
@@ -292,8 +301,9 @@ Return ONLY JSON: {{"investor_summary": "1-line summary for investors"}}
         "results": serp_results
     })
 
-
-
+# -------------------------------------------------------------------
+# History Route
+# -------------------------------------------------------------------
 @main.route("/history", methods=["GET"])
 def history():
     try:
