@@ -10,5 +10,5 @@ Key Highlights:
 • Real-time success prediction reports
 
 This project blends AI reasoning with data-driven validation, helping early founders move from intuition to intelligence.
-🔗 Live Demo: https://lnkd.in/g8jXkGpE
+🔗 Live Demo: (https://startup-ideas-app-6gng.onrender.com/)
 💻 GitHub: https://lnkd.in/gPuGHdTG
